@@ -123,6 +123,10 @@ export function useTranscriptSelection({
   const clickSelectionRef = useRef(false);
   // Between mousedown and mouseup, selectionchange only paints marks.
   const mouseDownRef = useRef(false);
+  // The word ids this panel last put in (or took from) the store. Only a store
+  // selection that differs from these was made elsewhere; `selection` can't
+  // tell, because dragging clears it to hide the toolbar.
+  const panelIdsRef = useRef<number[]>([]);
   // Mirrored into a ref so the event handlers below stay stable across edits.
   const cutOutIdsRef = useRef(cutOutIds);
   useEffect(() => {
@@ -153,6 +157,7 @@ export function useTranscriptSelection({
     (info: TranscriptSelectionInfo | null) => {
       setSelection(info);
       const ids = info?.ids ?? [];
+      panelIdsRef.current = ids;
       const prev = useEditorStore.getState().selectedWordIds;
       if (!sameIds(prev, ids)) setSelectedWords(ids);
     },
@@ -163,6 +168,7 @@ export function useTranscriptSelection({
     clearMarks();
     clickSelectionRef.current = false;
     setSelection(null);
+    panelIdsRef.current = [];
     setSelectedWords([]);
     window.getSelection()?.removeAllRanges();
   }, [clearMarks, setSelectedWords]);
@@ -191,6 +197,7 @@ export function useTranscriptSelection({
         anyDeleted: cutOut,
         anyKept: !cutOut,
       });
+      panelIdsRef.current = [word.id];
       setSelectedWords([word.id]);
     },
     [applyMarks, containerRef, setSelectedWords]
@@ -287,13 +294,13 @@ export function useTranscriptSelection({
     return () => document.removeEventListener("mousedown", handler);
   }, [clearSelection, scrollRef, freezeSelectionRef]);
 
-  // Mirror a selection made elsewhere (timeline wordbar) into this panel.
+  // Mirror a selection made elsewhere (timeline wordbar, text layer) into this panel.
   useEffect(() => {
     if (freezeSelectionRef.current) return;
     const container = containerRef.current;
     if (!container) return;
-    const shown = selection?.ids ?? [];
-    if (sameIds(shown, selectedWordIds)) return;
+    if (sameIds(panelIdsRef.current, selectedWordIds)) return;
+    panelIdsRef.current = selectedWordIds;
 
     const els = selectedWordIds
       .map((id) => container.querySelector<HTMLElement>(`[data-wid="${id}"]`))
@@ -306,7 +313,13 @@ export function useTranscriptSelection({
     }
     applyMarks(els);
     clickSelectionRef.current = true;
-    els[0].scrollIntoView({ block: "center" });
+    // Bring the selection into view only when it is off screen.
+    const scroller = scrollRef.current;
+    const word = els[0].getBoundingClientRect();
+    const view = scroller?.getBoundingClientRect();
+    if (view && (word.bottom < view.top || word.top > view.bottom)) {
+      els[0].scrollIntoView({ block: "center" });
+    }
     setSelection({
       ids: selectedWordIds,
       anyDeleted: selectedWordIds.some((id) => cutOutIds.has(id)),
@@ -314,11 +327,11 @@ export function useTranscriptSelection({
     });
   }, [
     selectedWordIds,
-    selection,
     cutOutIds,
     clearMarks,
     applyMarks,
     containerRef,
+    scrollRef,
     freezeSelectionRef,
   ]);
 
