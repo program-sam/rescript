@@ -222,8 +222,7 @@ async function main() {
     console.log("no local paths: ok");
   }
 
-  // Video + audio: a movie and a sound strip per keep (plus a hold strip where
-  // the render holds a frame), linked by relative path.
+  // Video + audio: one movie and one sound strip per keep, linked by relative path.
   {
     const file = await parse(await writeBlendProject(base));
     const list = strips(file);
@@ -245,8 +244,7 @@ async function main() {
         ["sound", 1, 104, 275],
         ["movie", 2, 276, 541],
         ["sound", 1, 276, 540],
-        ["movie", 2, 541, 1270],
-        ["movie", 2, 1270, 1271],
+        ["movie", 2, 541, 1271],
         ["sound", 1, 541, 1270],
       ],
       "strips on the timeline"
@@ -262,15 +260,15 @@ async function main() {
     });
     const movies = list.filter((s) => s.getInt("type") === 3);
     movies.forEach((s, i) => {
-      if (i < 4) eq(s.getFloat("startofs"), clips[i].sourceIn, "source in");
+      eq(s.getFloat("startofs"), clips[i].sourceIn, "source in");
       const strip = new StructView(file.sdna, "Strip", byAddress.get(s.getPointer("strip"))!);
       eq(strip.getString("dir"), "//", "movie dir is the .blend's folder");
       const elem = new StructView(file.sdna, "StripElem", byAddress.get(strip.getPointer("stripdata"))!);
       eq(elem.getString("name"), "interview.mp4", "movie file name");
     });
-    // The hold strip's content ends on the clip's last frame, so Blender holds it.
-    const hold = list[7];
-    eq([hold.getInt("len"), hold.getFloat("startofs"), hold.getFloat("endofs")], [1406, 1405, 0], "hold strip");
+    // The last clip runs one frame past the media's end, so Blender holds its last frame.
+    const last = movies[3];
+    eq([last.getInt("len"), last.getFloat("startofs"), last.getFloat("endofs")], [1406, 677, -1], "held last frame");
     const sound = file.blocks.filter((b) => b.code === "SO");
     eq(sound.length, 1, "one shared sound");
     const so = new StructView(file.sdna, "bSound", sound[0]);
@@ -289,6 +287,33 @@ async function main() {
       file.blocks.filter((b) => b.code === "DATA" && file.typeOf(b) === "Sequence")
     );
     console.log("video + audio project: ok");
+  }
+
+  // Where the audio outlasts a clip's frames mid-media, its movie strip plays on
+  // into the next source frames: no separate one-frame strips.
+  {
+    const keeps = [
+      { start: 0.001, end: 0.059 },
+      { start: 1.001, end: 1.059 },
+      { start: 2.001, end: 2.059 },
+    ];
+    const file = await parse(
+      await writeBlendProject({ ...base, keepRanges: keeps, duration: 100 / 30 })
+    );
+    const movies = strips(file).filter((s) => s.getInt("type") === 3);
+    eq(
+      movies.map((s) => [
+        s.getFloat("start") + s.getFloat("startofs"),
+        s.getFloat("start") + s.getInt("len") - s.getFloat("endofs"),
+        s.getInt("len"),
+      ]),
+      [
+        [1, 3, 100],
+        [3, 4, 100],
+        [4, 7, 100],
+      ],
+      "one movie strip per keep, running on to the next clip"
+    );
   }
 
   // Audio-only: sound strips on a 1000 fps (1 ms) grid; silent video: no sound datablock.
@@ -375,8 +400,7 @@ sc = bpy.context.scene
 ss = sorted(sc.sequence_editor.strips_all, key=lambda s: (s.frame_final_start, s.channel))
 got = [(s.type, s.frame_final_start, s.frame_final_end) for s in ss]
 want = [("SOUND", 1, 103), ("MOVIE", 1, 104), ("SOUND", 104, 275), ("MOVIE", 104, 276),
-        ("SOUND", 276, 540), ("MOVIE", 276, 541), ("SOUND", 541, 1270), ("MOVIE", 541, 1270),
-        ("MOVIE", 1270, 1271)]
+        ("SOUND", 276, 540), ("MOVIE", 276, 541), ("SOUND", 541, 1270), ("MOVIE", 541, 1271)]
 ok = (got == want and sc.render.fps == 30 and sc.frame_end == 1270
       and all(s.filepath == "//interview.mp4" for s in ss if s.type == "MOVIE")
       and [w.workspace.name for w in bpy.data.window_managers[0].windows] == ["Video Editing"])

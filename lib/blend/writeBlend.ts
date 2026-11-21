@@ -10,8 +10,10 @@
  * The timeline mirrors the rendered export: video keeps exactly the frames
  * ffmpeg's `trim` keeps, and each clip starts where ffmpeg's `concat` starts
  * it — once the longer of its video and audio has ended — rounded to a whole
- * frame. Where the audio outlasts the frames, the render holds the last frame;
- * so does a hold strip here. Blender cuts audio on whole frames only, so each
+ * frame. Where the audio outlasts the frames, the movie strip plays on into the
+ * next source frames until the next clip (the render repeats the last kept
+ * frame there instead); past the media's end Blender holds the last frame.
+ * Blender cuts audio on whole frames only, so each
  * sound strip starts exactly on the cut (shifted by a sub-frame sound offset)
  * and stops on the last frame boundary before its cut-out: deleted audio is
  * never played, at the cost of under a frame of kept audio at each cut-out.
@@ -56,7 +58,7 @@ export interface BlendStripPlan {
   sourceOut: number;
   /** Timeline frame the clip's video starts on (the scene starts at frame 1). */
   timelineStart: number;
-  /** Frames the clip's last frame is held until the next clip's video. */
+  /** Frames the clip's video runs on past its kept frames, until the next clip's video. */
   holdFrames: number;
   /** Source position (fractional frame) of the cut the audio starts on. */
   soundIn: number;
@@ -106,7 +108,7 @@ export function planBlendStrips(
     elapsed += Math.max(frames, audioFrames);
   }
   const length = Math.ceil(elapsed - 1e-6);
-  // Each clip's last frame stays up until the next clip with video starts.
+  // Each clip's video stays up until the next clip with video starts.
   let nextVideo = 1 + length;
   for (let i = clips.length - 1; i >= 0; i--) {
     const c = clips[i];
@@ -217,7 +219,7 @@ class Patcher {
   }
 }
 
-type StripKind = "video" | "hold" | "audio";
+type StripKind = "video" | "audio";
 
 function stripName(fileName: string, index: number, kind: StripKind): string {
   const suffix = ` ${index + 1}${kind === "video" ? "" : ` ${kind}`}`;
@@ -303,22 +305,14 @@ export async function writeBlendProject(input: BlendExportInput): Promise<Blob> 
   clips.forEach((clip, index) => {
     const frames = clip.sourceOut - clip.sourceIn;
     if (withVideo && frames > 0) {
+      // Runs on through the source past the kept frames; Blender holds the
+      // last frame where that runs past the media's end.
       addStrip("video", index, {
         len: sourceFrames,
         start: clip.timelineStart,
         sourceIn: clip.sourceIn,
-        frames,
+        frames: frames + clip.holdFrames,
       });
-      if (clip.holdFrames > 0) {
-        // Content cut off after the last kept frame: Blender holds a strip's
-        // last frame when the strip runs past its content.
-        addStrip("hold", index, {
-          len: clip.sourceOut,
-          start: clip.timelineStart + frames,
-          sourceIn: clip.sourceOut - 1,
-          frames: clip.holdFrames,
-        });
-      }
     }
     if (withAudio && clip.soundFrames > 0) {
       addStrip("audio", index, {
